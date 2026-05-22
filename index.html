@@ -2394,20 +2394,28 @@ function doLogout() { location.reload(); }
 
 // ── DATA LOADING ──────────────────────────────
 async function loadData() {
-  // Neon mode — always load
+  console.log('[loadData] Loading from Neon...');
   try {
-    const [c,p,f,b] = await Promise.all([
-      supa.select('clients','order=created_at'),
-      supa.select('produits','order=created_at'),
-      supa.select('factures','order=created_at'),
-      supa.select('bons_livraison','order=created_at'),
+    const [cl,pr,fa,bl] = await Promise.all([
+      dbReq('GET',{t:'clients'}),
+      dbReq('GET',{t:'produits'}),
+      dbReq('GET',{t:'factures'}),
+      dbReq('GET',{t:'bons_livraison'}),
     ]);
-    if(c.data)S.clients=c.data;
-    if(p.data)S.produits=p.data;
-    if(f.data)S.factures=f.data.map(fromF);
-    if(b.data)S.bls=b.data.map(fromB);
+    console.log('[loadData] clients:', cl.data?.length, 'produits:', pr.data?.length,
+      'factures:', fa.data?.length, 'bls:', bl.data?.length);
+    if(cl.error) console.error('[loadData] clients error:', cl.error);
+    if(pr.error) console.error('[loadData] produits error:', pr.error);
+    if(fa.error) console.error('[loadData] factures error:', fa.error);
+    if(bl.error) console.error('[loadData] bls error:', bl.error);
+    if(cl.data) S.clients  = cl.data;
+    if(pr.data) S.produits = pr.data;
+    if(fa.data) S.factures = fa.data.map(fromF);
+    if(bl.data) S.bls      = bl.data.map(fromB);
+    console.log('[loadData] Done. clients='+S.clients.length+' produits='+S.produits.length);
   } catch(e) {
-    console.warn('Impossible de charger les donnees:', e.message);
+    console.error('[loadData] Error:', e.message);
+    toast('Erreur chargement données: ' + e.message, 'error');
   }
 }
 
@@ -3647,7 +3655,10 @@ function v(id) { const el=document.getElementById(id); return el?el.value:''; }
 // ── INIT ──────────────────────────────────────
 (async function init() {
   S.user = {email:"local"};
-  try { await loadData(); } catch(e) { console.warn("loadData:",e.message); }
+  // Show loading spinner while fetching data
+  const loadEl = document.getElementById('loading');
+  if(loadEl) loadEl.innerHTML = '<div class="spinner spin"></div><div style="font-size:14px;color:#64748B;margin-top:12px">Chargement des données...</div>';
+  await loadData();
   showApp();
 })();
 
