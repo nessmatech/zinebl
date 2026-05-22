@@ -16,12 +16,19 @@ const COLS = {
 };
 
 // Escape a value for safe SQL string interpolation
-function sqlVal(v) {
+// Date column names — empty string should become NULL
+const DATE_COLS = new Set(["date","echeance","date_livraison","created_at"]);
+
+function sqlVal(v, colName) {
   if (v === null || v === undefined) return "NULL";
   if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  if (typeof v === "number") return isNaN(v) ? "0" : String(v);
+  if (typeof v === "number") return isNaN(v) ? "NULL" : String(v);
+  const s = String(v);
+  // Empty string for date columns = NULL
+  if (s === "" && colName && DATE_COLS.has(colName)) return "NULL";
+  if (s === "") return "NULL"; // any empty string = NULL (safer for Postgres)
   // String — escape single quotes by doubling them
-  return "'" + String(v).replace(/'/g, "''") + "'";
+  return "'" + s.replace(/'/g, "''") + "'";
 }
 
 function pick(table, body) {
@@ -69,6 +76,26 @@ module.exports = async function handler(req, res) {
       return res.json({ ok: true, message: "All tables created" });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
+    }
+  }
+
+  // ── CLEAR TABLE (TRUNCATE) ────────────────────────────────────
+  if (t === "_clear") {
+    const table = req.query.table;
+    if (!ALLOWED.includes(table))
+      return res.status(400).json({ error: "Invalid table: " + table });
+    try {
+      // TRUNCATE with CASCADE to handle foreign keys
+      await sql([`TRUNCATE TABLE "${table}" RESTART IDENTITY CASCADE`]);
+      return res.json({ ok: true, message: "Table " + table + " cleared" });
+    } catch (e) {
+      // Fallback: DELETE if TRUNCATE fails
+      try {
+        await sql([`DELETE FROM "${table}"`]);
+        return res.json({ ok: true, message: "Table " + table + " cleared (DELETE)" });
+      } catch (e2) {
+        return res.status(500).json({ error: e2.message });
+      }
     }
   }
 
@@ -125,7 +152,7 @@ module.exports = async function handler(req, res) {
         const colSQL  = keys.map(k => `"${k}"`).join(", ");
         const rowsSQL = batch.map(row => {
           const c2 = pick(t, row);
-          return "(" + keys.map(k => sqlVal(c2[k] !== undefined ? c2[k] : null)).join(", ") + ")";
+          return "(" + keys.map(k => sqlVal(c2[k] !== undefined ? c2[k] : null, k)).join(", ") + ")";
         });
 
         const query = `INSERT INTO "${t}" (${colSQL}) VALUES ${rowsSQL.join(", ")} RETURNING *`;
@@ -142,7 +169,7 @@ module.exports = async function handler(req, res) {
       const cols = pick(t, req.body || {});
       const keys = Object.keys(cols);
       if (!keys.length) return res.status(400).json({ error: "No fields to update" });
-      const setSQL = keys.map(k => `"${k}" = ${sqlVal(cols[k])}`).join(", ");
+      const setSQL = keys.map(k => `"${k}" = ${sqlVal(cols[k], k)}`).join(", ");
       const query  = `UPDATE "${t}" SET ${setSQL} WHERE id = ${sqlVal(id)} RETURNING *`;
       const rows   = await sql([query]);
       if (!rows.length) return res.status(404).json({ error: "Not found" });
