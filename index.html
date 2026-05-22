@@ -231,6 +231,12 @@ const supa = {
     const r = await dbReq("DELETE",{t:table,id});
     return {error:r.error||null};
   },
+  // Bulk insert — sends all rows in ONE request
+  async bulkInsert(table, rows) {
+    const r = await dbReq("POST",{t:table,bulk:"1"},rows);
+    if (r.error) return {data:[], error:r.error};
+    return {data: r.data||[], inserted: r.inserted||0, error:null};
+  },
   signOut(){}, getUser(){return {email:"local"};}, _token:null,
 };
 
@@ -808,23 +814,19 @@ function handleCSVFile(file) {
 async function importClientCSVConfirm() {
   if(!_clientCSVRows.length) { toast('Aucune donnée à importer','error'); return; }
   const btn = document.querySelector('#_modal .btn-primary');
-  if(btn){ btn.disabled=true; btn.textContent='Importation...'; }
-  let ok=0;
-  for(let i=0;i<_clientCSVRows.length;i++) {
-    const row = _clientCSVRows[i];
-    const {data,error} = await supa.insert('clients', row);
-    if(data) {
-      S.clients.push(data);
-    } else {
-      // Mode local ou erreur Supabase : générer ID unique
-      S.clients.push({...row, id:'loc-'+(Date.now()+i)+'-'+Math.random().toString(36).slice(2), created_at:new Date().toISOString()});
-    }
-    ok++;
+  if(btn){ btn.disabled=true; btn.textContent='Importation en cours...'; }
+  try {
+    const {data, inserted, error} = await supa.bulkInsert('clients', _clientCSVRows);
+    if(error) { toast('Erreur import: '+error.message,'error'); if(btn){btn.disabled=false;btn.textContent='✓ Importer';} return; }
+    if(data && data.length) S.clients.push(...data);
+    _clientCSVRows = [];
+    closeModal();
+    toast((inserted||data?.length||0)+' client(s) importé(s) avec succès','success');
+    renderApp();
+  } catch(e) {
+    toast('Erreur: '+e.message,'error');
+    if(btn){btn.disabled=false;btn.textContent='✓ Importer';}
   }
-  _clientCSVRows = [];
-  closeModal();
-  toast(ok+' client(s) importé(s) avec succès','success');
-  renderApp();
 }
 
 // ── DOSSIER CLIENT ────────────────────────────
@@ -1469,15 +1471,19 @@ function previewCSV(input) {
 
 async function importCSVConfirm() {
   if(!_csvRows.length) return;
-  let ok=0, fail=0;
-  for(const row of _csvRows) {
-    const {data,error} = await supa.insert('produits', row);
-    if(!error && data) { S.produits.push(data); ok++; }
-    else fail++;
+  const btn = document.querySelector('#_modal .btn-primary');
+  if(btn){ btn.disabled=true; btn.textContent='Importation en cours...'; }
+  try {
+    const {data, inserted, error} = await supa.bulkInsert('produits', _csvRows);
+    if(error) { toast('Erreur import: '+error.message,'error'); if(btn){btn.disabled=false;btn.textContent='✓ Importer';} return; }
+    if(data && data.length) S.produits.push(...data);
+    closeModal();
+    toast((inserted||data?.length||0)+' produit(s) importé(s)','success');
+    renderApp();
+  } catch(e) {
+    toast('Erreur: '+e.message,'error');
+    if(btn){btn.disabled=false;btn.textContent='✓ Importer';}
   }
-  closeModal();
-  toast(`${ok} produit(s) importé(s)${fail>0?' — '+fail+' erreur(s)':''}`, ok>0?'success':'error');
-  renderApp();
 }
 
 
@@ -2234,49 +2240,29 @@ async function confirmImportBL() {
   const clientId = document.getElementById('bl-import-client')?.value;
   if(!clientId) { toast('Veuillez sélectionner un client','error'); return; }
   const tvaActive = document.getElementById('bl-import-tva')?.checked!==false;
-
   const btn = document.getElementById('bl-import-btn');
   if(btn){btn.disabled=true;btn.textContent='Import...';}
-
-  let ok=0;
-  for(let i=0;i<_blImportRows.length;i++){
-    const row = _blImportRows[i];
-    const body = {
-      numero:       row.numero,
-      client_id:    clientId,
-      date:         row.date||today(),
-      date_livraison: row.dateLivraison||null,
-      statut:       row.statut||'en cours',
-      lignes:       JSON.stringify([]),
-      acompte:      row.acompte||0,
-      notes:        row.description||'',
-      motif:        row.motif||'',
-      tvaActive:    tvaActive,
-      prixDirect:   row.prixDirect||0,
-    };
-    const {data,error} = await supa.insert('bons_livraison', body);
-    const localId = 'bl-imp-'+(Date.now()+i)+'-'+Math.random().toString(36).slice(2);
-    S.bls.push({
-      ...(data||{}),
-      id: data?.id||localId,
-      numero: row.numero,
-      clientId,
-      date: row.date||today(),
-      dateLivraison: row.dateLivraison||null,
-      statut: 'en cours',
-      lignes: [],
-      acompte: row.acompte||0,
-      notes: row.description||'',
-      motif: row.motif||'',
-      tvaActive,
-      prixDirect: row.prixDirect||0,
-    });
-    ok++;
+  const rows = _blImportRows.map(r=>({
+    numero: r.numero, client_id: clientId,
+    date: r.date||today(), date_livraison: r.dateLivraison||null,
+    statut: 'en cours', lignes: [], acompte: r.acompte||0,
+    notes: r.description||'', motif: r.motif||'',
+    tvaActive, prixDirect: r.prixDirect||0,
+  }));
+  try {
+    const {data, inserted, error} = await supa.bulkInsert('bons_livraison', rows);
+    if(error) { toast('Erreur import BL: '+error.message,'error'); if(btn){btn.disabled=false;btn.textContent='✓ Importer les BL';} return; }
+    if(data && data.length) {
+      data.forEach(bl => S.bls.push({...bl, clientId:bl.client_id, factureId:bl.facture_id, dateLivraison:bl.date_livraison}));
+    }
+    _blImportRows=[];
+    closeModal();
+    toast((inserted||data?.length||0)+' BL importé(s)','success');
+    renderApp();
+  } catch(e) {
+    toast('Erreur: '+e.message,'error');
+    if(btn){btn.disabled=false;btn.textContent='✓ Importer les BL';}
   }
-  _blImportRows=[];
-  closeModal();
-  toast(`${ok} BL importé(s) pour ${S.clients.find(c=>c.id===clientId)?.nom||'ce client'}`,'success');
-  renderApp();
 }
 
 function toggleBLTVASwitch() {
