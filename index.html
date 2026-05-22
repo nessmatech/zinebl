@@ -62,7 +62,7 @@ tr:hover td{background:#FAFBFF}
 </style>
 </head>
 <body>
-<div id="loading" class="spinner-wrap">
+<div id="loading" class="spinner-wrap" style="position:relative"><button onclick="debugDB()" style="position:absolute;top:10px;right:10px;background:#6366F1;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer">🔍 Test DB</button>
   <div class="spinner spin"></div>
   <div style="font-size:14px;color:#64748B">Chargement...</div>
 </div>
@@ -1204,6 +1204,7 @@ function renderProduits() {
         <h2>Produits & Catalogue</h2>
         <div class="flex gap10">
           <button class="btn" style="background:#E6FBF4;color:#00C48C;border:none" onclick="openImportCSV()">${ICONS.upload} Importer CSV</button>
+          <button class="btn" style="background:#FFF0F0;color:#EF4444;border:1px solid #FECACA" onclick="clearAllProduits()">🗑 Vider tout</button>
           <button class="btn" onclick="exportCSVTemplate()" style="background:#EEF2FF;color:#6366F1;border:none">${ICONS.download} Modèle CSV</button>
           <button class="btn btn-primary" onclick="openProduitModal()">${ICONS.plus} Nouveau produit</button>
         </div>
@@ -1889,7 +1890,7 @@ async function convertSelBLsToFacture() {
     numero,
     client_id: clientId,
     date: today(),
-    echeance: '',
+    echeance: null,
     statut: 'en_attente',
     lignes: JSON.stringify(lignes),
     livree: true
@@ -1906,7 +1907,7 @@ async function convertSelBLsToFacture() {
     numero,
     clientId,
     date: today(),
-    echeance: '',
+    echeance: null,
     statut: 'en_attente',
     lignes,
     livree: true
@@ -2980,7 +2981,7 @@ function updateFacturesForClient(clientId) {
 
 async function savePaiement(id) {
   const body = {
-    date: v('pay-date')||today(),
+    date: v('pay-date')||null||today(),
     montant: +v('pay-montant')||0,
     clientId: v('pay-client'),
     factureId: v('pay-facture')||null,
@@ -3614,6 +3615,40 @@ function resetSupabaseConfig() {
   renderApp();
 }
 
+// ── CLEAR ALL DATA FUNCTIONS ─────────────────────────────────
+async function clearAllClients() {
+  const count = S.clients.length;
+  if (!count) { toast('Aucun client à supprimer', 'error'); return; }
+  if (!confirm('Supprimer TOUS les ' + count + ' clients ? Cette action est irréversible.')) return;
+  try {
+    const r = await fetch('/api/db?t=_clear&table=clients', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { toast('Erreur: ' + d.error, 'error'); return; }
+    S.clients = [];
+    toast(count + ' clients supprimés', 'success');
+    renderApp();
+  } catch(e) { toast('Erreur: ' + e.message, 'error'); }
+}
+
+async function clearAllProduits() {
+  const count = S.produits.length;
+  if (!count) { toast('Aucun produit à supprimer', 'error'); return; }
+  if (!confirm('Supprimer TOUS les ' + count + ' produits ? Cette action est irréversible.')) return;
+  try {
+    const r = await fetch('/api/db?t=_clear&table=produits', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { toast('Erreur: ' + d.error, 'error'); return; }
+    S.produits = [];
+    toast(count + ' produits supprimés', 'success');
+    renderApp();
+  } catch(e) { toast('Erreur: ' + e.message, 'error'); }
+}
+
+async function clearTable(table) {
+  const r = await fetch('/api/db?t=_clear&table=' + table, { method: 'POST' });
+  return r.json();
+}
+
 function saveAllCFG() {
   saveCFG({
     appName: v('cfg-appName') || 'DentalPro',
@@ -3672,6 +3707,35 @@ function showApp() {
 function v(id) { const el=document.getElementById(id); return el?el.value:''; }
 
 // ── INIT ──────────────────────────────────────
+// Debug function — shows DB status in an alert
+async function debugDB() {
+  const btn = event.target;
+  btn.textContent = '⏳ Testing...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/db?t=_ping');
+    const txt = await r.text();
+    if (txt.trim().startsWith('<')) {
+      alert('❌ API /api/db not found!\n\nVercel returned HTML (404).\n\nFix: Check that api/db.js is in your GitHub repo and redeploy.');
+      return;
+    }
+    const d = JSON.parse(txt);
+    if (!d.ok) { alert('❌ DB Error: ' + d.error); return; }
+
+    // Now test data
+    const cr = await fetch('/api/db?t=clients');
+    const cd = await cr.json();
+
+    alert('✅ API Connected!\n\nNeon tables: ' + (d.tables||[]).join(', ') +
+      '\n\nClients in DB: ' + (cd.data ? cd.data.length : 'ERROR: '+JSON.stringify(cd)));
+  } catch(e) {
+    alert('❌ Network error: ' + e.message + '\n\nAPI /api/db is not reachable.');
+  } finally {
+    btn.textContent = '🔍 Test DB';
+    btn.disabled = false;
+  }
+}
+
 (async function init() {
   S.user = {email:"local"};
   // Show loading spinner while fetching data
