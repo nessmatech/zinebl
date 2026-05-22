@@ -2394,28 +2394,47 @@ function doLogout() { location.reload(); }
 
 // ── DATA LOADING ──────────────────────────────
 async function loadData() {
-  console.log('[loadData] Loading from Neon...');
+  // Direct fetch test — bypasses all abstractions
   try {
-    const [cl,pr,fa,bl] = await Promise.all([
-      dbReq('GET',{t:'clients'}),
-      dbReq('GET',{t:'produits'}),
-      dbReq('GET',{t:'factures'}),
-      dbReq('GET',{t:'bons_livraison'}),
+    const testUrl = '/api/db?t=clients';
+    const raw = await fetch(testUrl);
+    const txt = await raw.text();
+    console.log('[loadData] Raw API response (first 200):', txt.slice(0,200));
+
+    if (txt.trim().startsWith('<')) {
+      // API not found — Vercel routing issue
+      console.error('[loadData] API returned HTML — /api/db not reachable');
+      toast('API introuvable — vérifiez le déploiement Vercel', 'error');
+      return;
+    }
+
+    const parsed = JSON.parse(txt);
+    console.log('[loadData] clients count:', parsed.data ? parsed.data.length : 'no data field', parsed);
+
+    if (!parsed.data) {
+      console.error('[loadData] Unexpected response format:', parsed);
+      return;
+    }
+
+    // Load all tables in parallel
+    const [cl, pr, fa, bl] = await Promise.all([
+      fetch('/api/db?t=clients').then(r=>r.json()),
+      fetch('/api/db?t=produits').then(r=>r.json()),
+      fetch('/api/db?t=factures').then(r=>r.json()),
+      fetch('/api/db?t=bons_livraison').then(r=>r.json()),
     ]);
-    console.log('[loadData] clients:', cl.data?.length, 'produits:', pr.data?.length,
-      'factures:', fa.data?.length, 'bls:', bl.data?.length);
-    if(cl.error) console.error('[loadData] clients error:', cl.error);
-    if(pr.error) console.error('[loadData] produits error:', pr.error);
-    if(fa.error) console.error('[loadData] factures error:', fa.error);
-    if(bl.error) console.error('[loadData] bls error:', bl.error);
-    if(cl.data) S.clients  = cl.data;
-    if(pr.data) S.produits = pr.data;
-    if(fa.data) S.factures = fa.data.map(fromF);
-    if(bl.data) S.bls      = bl.data.map(fromB);
-    console.log('[loadData] Done. clients='+S.clients.length+' produits='+S.produits.length);
+
+    if (cl.data && cl.data.length >= 0) S.clients  = cl.data;
+    if (pr.data && pr.data.length >= 0) S.produits = pr.data;
+    if (fa.data && fa.data.length >= 0) S.factures = fa.data.map(fromF);
+    if (bl.data && bl.data.length >= 0) S.bls      = bl.data.map(fromB);
+
+    console.log('[loadData] Loaded — clients:', S.clients.length,
+      'produits:', S.produits.length, 'factures:', S.factures.length, 'bls:', S.bls.length);
+
   } catch(e) {
-    console.error('[loadData] Error:', e.message);
-    toast('Erreur chargement données: ' + e.message, 'error');
+    console.error('[loadData] Exception:', e.message);
+    toast('Erreur de connexion à la base de données: ' + e.message, 'error');
   }
 }
 
