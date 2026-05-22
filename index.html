@@ -71,13 +71,24 @@ tr:hover td{background:#FAFBFF}
 <div class="toast-wrap" id="toasts"></div>
 
 <script>
-// ════════════════════════════════════════════════
-// ─────────────────────────────────────────────────
-//  DentalPro — Neon + Vercel Edition
-//  API calls go to /api/data (serverless functions)
-//  No authentication required — open access
-// ─────────────────────────────────────────────────
 
+// ════════════════════════════════════════════════
+//  ⚙️  CONFIGURATION SUPABASE  (lignes 1-2)
+//  Remplacez ces valeurs avec vos clés Supabase
+// ════════════════════════════════════════════════
+
+// -- IDENTIFIANTS PAR DEFAUT (autofill) --
+// Remplacez par votre email et mot de passe Supabase
+// ════════════════════════════════════════════════
+
+// ── UTILS ─────────────────────────────────────
+const fmt = n => new Intl.NumberFormat('fr-MA',{style:'currency',currency:CFG?.currency||'MAD',minimumFractionDigits:2}).format(n||0);
+const fmtDate = d => d ? new Date(d).toLocaleDateString('fr-MA') : '—';
+const today = () => new Date().toISOString().slice(0,10);
+// ════════════════════════════════════════════════
+//  DentalPro — Neon Database Edition
+//  API: /api/db (Vercel Serverless + Neon PostgreSQL)
+// ════════════════════════════════════════════════
 const TVA = 0.20;
 const calcTotal = (ls=[]) => ls.reduce((s,l)=>s+(+l.qte||0)*(+l.prix||0),0);
 const calcBL = (bl,prods=[]) => {
@@ -171,111 +182,57 @@ function openModal(title, bodyHTML, width=520) {
 }
 function closeModal() { if(_modalEl){_modalEl.remove();_modalEl=null;} }
 
-// ── NEON HTTP API — direct browser calls ──────────
-// No serverless functions needed.
-// Set NEON_CONNECTION in localStorage via Settings.
-// Format: https://ep-xxx.neon.tech (project endpoint)
-// + NEON_API_KEY: your Neon API key
+// ── SUPABASE CLIENT ───────────────────────────
+// Minimal Supabase REST client (no SDK needed)
+// ── API CLIENT ───────────────────────────────────────────────
+const API = "/api/db";
 
-// Neon HTTP API: POST https://console.neon.tech/api/v2/projects/{id}/queries
-// Simpler: use Neon's SQL-over-HTTP endpoint
-
-// ── CONFIG: set these in Paramètres → Base de données
-function getNeonCfg() {
+async function dbReq(method, params, body) {
+  const qs = Object.entries(params).map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
   try {
-    const cfg = JSON.parse(localStorage.getItem('dp_neon') || '{}');
-    return { url: cfg.url || '', key: cfg.key || '' };
-  } catch(e) { return { url:'', key:'' }; }
-}
-
-async function neonQuery(sql, params) {
-  const { url, key } = getNeonCfg();
-  if (!url || !key) {
-    return { rows: [], error: 'Neon non configuré — allez dans Paramètres → Base de données' };
-  }
-  try {
-    const r = await fetch(url + '/sql', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + key,
-        'Neon-Connection-String': url
-      },
-      body: JSON.stringify({ query: sql, params: params || [] })
+    const r = await fetch(API+"?"+qs, {
+      method,
+      headers: method!=="GET"&&method!=="DELETE" ? {"Content-Type":"application/json"} : {},
+      body: body ? JSON.stringify(body) : undefined
     });
-    const d = await r.json();
-    if (!r.ok) return { rows: [], error: d.message || d.error || ('HTTP ' + r.status) };
-    return { rows: d.rows || [], error: null };
+    const txt = await r.text();
+    if (txt.trim().startsWith("<")) {
+      console.error("[API]", r.status, "HTML response — check Vercel deployment");
+      return {data:null, error:{message:"API "+r.status+" — check Vercel logs"}};
+    }
+    const d = JSON.parse(txt);
+    if (!r.ok) return {data:null, error:{message:d.error||"HTTP "+r.status}};
+    return d;
   } catch(e) {
-    return { rows: [], error: e.message };
+    console.error("[API]", method, params, e.message);
+    return {data:null, error:{message:e.message}};
   }
-}
-
-// ── TABLES & COLUMNS ─────────────────────────────
-const ALLOWED_TABLES = new Set(['clients','produits','factures','bons_livraison']);
-const TABLE_COLS = {
-  clients:        ['nom','cabinet','ville','tel','email','adresse','solde'],
-  produits:       ['ref','nom','categorie','designation','famille','prix','prixHT','prixTTC','stock','stockTheorique','stockReel','qteCdeClient','qteCdeFourn','unite'],
-  factures:       ['numero','client_id','date','echeance','statut','lignes','livree'],
-  bons_livraison: ['numero','facture_id','client_id','date','date_livraison','statut','lignes','acompte','notes','motif','tvaActive','prixDirect'],
-};
-
-function pickCols(table, body) {
-  const out = {};
-  for (const col of (TABLE_COLS[table] || [])) {
-    if (body[col] !== undefined)
-      out[col] = (col === 'lignes' && typeof body[col] === 'object') ? JSON.stringify(body[col]) : body[col];
-  }
-  return out;
 }
 
 const supa = {
   async select(table) {
-    const { rows, error } = await neonQuery('SELECT * FROM "' + table + '" ORDER BY created_at ASC');
-    if (error) { console.error('[select]', table, error); return { data: [], error: { message: error } }; }
-    return { data: rows, error: null };
+    const r = await dbReq("GET",{t:table});
+    if (r.error) return {data:[], error:r.error};
+    return {data:r.data||[], error:null};
   },
-
   async insert(table, body) {
-    const cols = pickCols(table, body);
-    const keys = Object.keys(cols);
-    if (!keys.length) return { data: null, error: { message: 'No valid fields' } };
-    const vals   = Object.values(cols);
-    const colSQL = keys.map(k => '"' + k + '"').join(', ');
-    const valSQL = keys.map((_, i) => '$' + (i + 1)).join(', ');
-    const { rows, error } = await neonQuery(
-      'INSERT INTO "' + table + '" (' + colSQL + ') VALUES (' + valSQL + ') RETURNING *', vals
-    );
-    if (error) { toast('Erreur sauvegarde: ' + error, 'error'); return { data: null, error: { message: error } }; }
-    return { data: rows[0] || null, error: null };
+    const r = await dbReq("POST",{t:table},body);
+    if (r.error) { toast("Erreur: "+r.error.message,"error"); return {data:null,error:r.error}; }
+    return {data:r.data, error:null};
   },
-
   async update(table, body, filter) {
-    const id   = (filter || '').replace('id=eq.', '');
-    const cols = pickCols(table, body);
-    const keys = Object.keys(cols);
-    if (!keys.length) return { data: null, error: { message: 'No fields' } };
-    const vals   = Object.values(cols);
-    const setSQL = keys.map((k, i) => '"' + k + '" = $' + (i + 1)).join(', ');
-    const { rows, error } = await neonQuery(
-      'UPDATE "' + table + '" SET ' + setSQL + ' WHERE id = $' + (keys.length + 1) + ' RETURNING *',
-      [...vals, id]
-    );
-    if (error) return { data: null, error: { message: error } };
-    return { data: rows[0] || null, error: null };
+    const id = (filter||"").replace("id=eq.","");
+    const r = await dbReq("PATCH",{t:table,id},body);
+    if (r.error) return {data:null,error:r.error};
+    return {data:r.data, error:null};
   },
-
   async delete(table, filter) {
-    const id = (filter || '').replace('id=eq.', '');
-    const { error } = await neonQuery('DELETE FROM "' + table + '" WHERE id = $1', [id]);
-    return { error: error ? { message: error } : null };
+    const id = (filter||"").replace("id=eq.","");
+    const r = await dbReq("DELETE",{t:table,id});
+    return {error:r.error||null};
   },
-
-  signOut() {}, getUser() { return { email: 'local' }; }, _token: null,
+  signOut(){}, getUser(){return {email:"local"};}, _token:null,
 };
-
-;
-
 
 // ── APP STATE ─────────────────────────────────
 // ── SETTINGS ─────────────────────────────────
@@ -299,12 +256,20 @@ const CFG = {
   themeColor: '#6366F1',
   currency: 'MAD',
   tva: '20',
+  blTvaDefault: true,
   // Supabase — can be overridden from Paramètres (saved in localStorage)
+  supabaseUrl: '',
+  supabaseAnon: '',
+  supabaseEmail: '',
+  supabasePassword: '',
   ...loadCFG()
 };
 
 // Apply saved Supabase config over the hardcoded constants
-// Neon mode — no Supabase helpers needed
+
+
+
+
 
 const S = {
   user: null,
@@ -2443,7 +2408,7 @@ function doLogout() { location.reload(); }
 
 // ── DATA LOADING ──────────────────────────────
 async function loadData() {
-  // Neon: always load
+  // Neon mode — always load
   try {
     const [c,p,f,b] = await Promise.all([
       supa.select('clients','order=created_at'),
@@ -3468,17 +3433,22 @@ function renderParametres() {
 
       </div>
 
-      <!-- Neon DB Status -->
-      <div class="card" style="padding:20px 24px;grid-column:1/-1;border-left:4px solid #00C48C">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="font-size:20px">⚡</div>
+      <!-- Neon DB Config -->
+      <div class="card" style="padding:24px 28px;grid-column:1/-1;border-left:4px solid #00C48C">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
+          <div style="width:36px;height:36px;background:#00C48C18;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">⚡</div>
           <div>
-            <div style="font-weight:700;font-size:14px">Base de données : Neon PostgreSQL</div>
-            <div style="font-size:12px;color:#64748B;margin-top:2px">
-              Connexion via <code>NEON_DATABASE_URL</code> (variable Vercel)
-              — <a href="/api/ping" target="_blank" style="color:#6366F1">Tester /api/ping</a>
-            </div>
+            <div style="font-weight:700;font-size:15px">Connexion base de données</div>
+            <div style="font-size:12px;color:#94A3B8">Neon PostgreSQL — <a href="/api/db?t=_ping" target="_blank" style="color:#6366F1">Tester /api/db?t=_ping</a> · <a href="/api/db?t=_setup" target="_blank" style="color:#00C48C">Initialiser /api/db?t=_setup</a></div>
           </div>
+          <div style="margin-left:auto;background:${CFG.neonOk?'#DCFCE7':'#F1F5F9'};color:${CFG.neonOk?'#16A34A':'#64748B'};border-radius:99px;padding:4px 14px;font-size:12px;font-weight:700">
+            ${CFG.neonOk?'✓ Connecté':'Non testé'}
+          </div>
+        </div>
+        <div style="background:#F8FAFC;border-radius:10px;padding:16px;font-size:13px;color:#475569;line-height:2">
+          La connexion est configurée via <strong>NEON_DATABASE_URL</strong> dans Vercel.<br>
+          Pour initialiser les tables : visitez <a href="/api/db?t=_setup" target="_blank" style="color:#00C48C;font-weight:700">/api/db?t=_setup</a><br>
+          Pour tester la connexion : visitez <a href="/api/db?t=_ping" target="_blank" style="color:#6366F1;font-weight:700">/api/db?t=_ping</a>
         </div>
       </div>
 
@@ -3500,58 +3470,135 @@ function handleLogoUpload(input) {
   reader.readAsDataURL(file);
 }
 
-async function testNeonConnection() {
-  var resEl = document.getElementById('neon-test-result');
-  var url = (document.getElementById('neon-url') && document.getElementById('neon-url').value || '').trim();
-  var key = (document.getElementById('neon-key') && document.getElementById('neon-key').value || '').trim();
-  if (!url || !key) {
-    if(resEl) { resEl.style.cssText='background:#FFF8E6;color:#A16207;padding:10px 14px;border-radius:8px;font-size:13px'; resEl.textContent='Remplissez les deux champs'; }
+async function testSupabaseConnection() {
+  const url   = (document.getElementById('cfg-supa-url')?.value||'').trim();
+  const anon  = (document.getElementById('cfg-supa-anon')?.value||'').trim();
+  const email = (document.getElementById('cfg-supa-email')?.value||'').trim();
+  const pwd   = (document.getElementById('cfg-supa-pwd')?.value||'').trim();
+  const res   = document.getElementById('supa-test-result');
+  if(!res) return;
+
+  function showMsg(bg, border, color, html) {
+    res.style.cssText = `display:block;background:${bg};border:1.5px solid ${border};color:${color};border-radius:10px;padding:14px 16px;font-size:13px;font-weight:600`;
+    res.innerHTML = html;
+  }
+
+  if(!url) {
+    showMsg('#FFF8E6','#FDE68A','#A16207','⚠️ URL manquante — format : https://xxxx.supabase.co'); return;
+  }
+  if(!url.startsWith('https://') || !url.includes('.supabase.co')) {
+    showMsg('#FFF8E6','#FDE68A','#A16207','⚠️ URL invalide — exemple : https://abcdefgh.supabase.co'); return;
+  }
+  if(!anon) {
+    showMsg('#FFF8E6','#FDE68A','#A16207','⚠️ Clé anon manquante — Project Settings → API → anon public'); return;
+  }
+  if(!anon.startsWith('eyJ')) {
+    showMsg('#FFF8E6','#FDE68A','#A16207','⚠️ Clé anon invalide — elle doit commencer par eyJ'); return;
+  }
+  if(!email || !pwd) {
+    showMsg('#EEF2FF','#C7D2FE','#3730A3','💡 URL et clé anon valides. Ajoutez email + mot de passe pour tester complètement.'); return;
+  }
+
+  if(location.protocol === 'file:') {
+    saveCFG({supabaseUrl:url, supabaseAnon:anon, supabaseEmail:email, supabasePassword:pwd});
+    showMsg('#EEF2FF','#C7D2FE','#3730A3', [
+      '<strong>📁 Fichier local détecté (file://).</strong><br><br>',
+      'Le navigateur bloque les requêtes réseau depuis file:// (CORS). Config sauvegardée ✓<br><br>',
+      '<strong>Solutions :</strong>',
+      '<ul style="margin:6px 0 0 16px;font-weight:400;line-height:1.9">',
+      '<li>Publiez le fichier en ligne (Netlify Drop…) puis testez depuis là</li>',
+      '<li>Ou cliquez <strong>Sauvegarder &amp; Reconnecter</strong> directement</li>',
+      '</ul>'
+    ].join(''));
     return;
   }
-  if(resEl) { resEl.style.cssText='background:#F8FAFC;color:#64748B;padding:10px 14px;border-radius:8px;font-size:13px'; resEl.textContent='Test en cours...'; }
+
+  showMsg('#F8FAFC','#E2E8F0','#64748B','⏳ Connexion en cours...');
+
   try {
-    var r = await fetch(url + '/sql', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key,'Neon-Connection-String':url},
-      body:JSON.stringify({query:'SELECT 1 as ok'})
+    const r = await fetch(url + '/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','apikey':anon},
+      body: JSON.stringify({email, password:pwd})
     });
-    var d = await r.json();
-    if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
-    if(resEl) { resEl.style.cssText='background:#F0FDF4;color:#166534;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600'; resEl.textContent='✅ Connexion réussie !'; }
-    var statusEl = document.getElementById('neon-status');
-    if(statusEl) statusEl.innerHTML='<span style="background:#DCFCE7;color:#16A34A;border-radius:99px;padding:4px 12px;font-size:12px;font-weight:700">Connecté</span>';
-  } catch(e) {
-    if(resEl) { resEl.style.cssText='background:#FFF0F0;color:#991B1B;padding:10px 14px;border-radius:8px;font-size:13px'; resEl.textContent='❌ ' + e.message; }
+    const d = await r.json();
+    if(!r.ok) {
+      const msg = d.error_description || d.msg || d.error || 'Identifiants incorrects';
+      showMsg('#FFF0F0','#FECACA','#991B1B', [
+        '<strong>❌ Authentification échouée :</strong> ' + esc(msg) + '<br>',
+        '<span style="font-size:12px;color:#64748B;font-weight:400">',
+        'Vérifiez que cet utilisateur existe dans Supabase → Authentication → Users',
+        '</span>'
+      ].join(''));
+      return;
+    }
+    supa._token = d.access_token;
+    localStorage.setItem('dp_token', d.access_token);
+    localStorage.setItem('dp_user', JSON.stringify({email:d.user?.email, id:d.user?.id}));
+    showMsg('#F0FDF4','#86EFAC','#166534', [
+      '✅ <strong>Connexion réussie !</strong> Connecté : <strong>' + esc(email) + '</strong><br>',
+      '<span style="font-size:12px;font-weight:400">Cliquez sur <strong>Sauvegarder &amp; Reconnecter</strong> pour charger vos données.</span>'
+    ].join(''));
+  } catch(err) {
+    showMsg('#FFF0F0','#FECACA','#991B1B', [
+      '<strong>❌ Failed to fetch</strong> — requête bloquée.<br><br>',
+      '<strong>Causes fréquentes :</strong>',
+      '<ul style="margin:6px 0 0 16px;font-weight:400;line-height:1.9;color:#64748B">',
+      '<li>App ouverte en <strong>file://</strong> → publiez-la en ligne</li>',
+      '<li>Domaine non autorisé → Supabase : Project Settings → API → Allowed origins</li>',
+      '<li>Projet Supabase en pause → le réactiver sur supabase.com</li>',
+      '<li>URL du projet incorrecte</li>',
+      '</ul>'
+    ].join(''));
   }
 }
 
-async function saveNeonConfig() {
-  var url = (document.getElementById('neon-url') && document.getElementById('neon-url').value || '').trim();
-  var key = (document.getElementById('neon-key') && document.getElementById('neon-key').value || '').trim();
-  if (!url || !key) { toast('Remplissez les deux champs','error'); return; }
-  localStorage.setItem('dp_neon', JSON.stringify({url:url, key:key}));
-  toast('Configuration sauvegardée — initialisation des tables...','success');
-  await initNeonTables();
-  await loadData();
+async function saveSupabaseConfig() {
+  const url  = document.getElementById('cfg-supa-url')?.value?.trim()||'';
+  const anon = document.getElementById('cfg-supa-anon')?.value?.trim()||'';
+  const email= document.getElementById('cfg-supa-email')?.value?.trim()||'';
+  const pwd  = document.getElementById('cfg-supa-pwd')?.value?.trim()||'';
+
+  if(!url||!anon) { toast('URL et clé anon requis','error'); return; }
+
+  // Save to CFG (persisted in localStorage via saveCFG)
+  saveCFG({ supabaseUrl:url, supabaseAnon:anon, supabaseEmail:email, supabasePassword:pwd });
+
+  // Reconnect immediately with new credentials
+  try {
+    if(email && pwd) {
+      const r = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json','apikey':anon},
+        body:JSON.stringify({email,password:pwd})
+      });
+      const d = await r.json();
+      if(r.ok && d.access_token) {
+        supa._token = d.access_token;
+        localStorage.setItem('dp_token', d.access_token);
+        localStorage.setItem('dp_user', JSON.stringify({email:d.user?.email,id:d.user?.id}));
+        toast('Supabase connecté ! Rechargement des données...','success');
+        await loadData();
+      } else {
+        toast('Config sauvegardée — connexion échouée : '+(d.error_description||'Vérifiez vos identifiants'),'error');
+      }
+    } else {
+      toast('Configuration Supabase sauvegardée','success');
+    }
+  } catch(e) {
+    toast('Config sauvegardée — erreur réseau : '+e.message,'error');
+  }
   renderApp();
 }
 
-async function initNeonTables() {
-  var tables = [
-    'CREATE TABLE IF NOT EXISTS clients (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), nom TEXT NOT NULL, cabinet TEXT DEFAULT \'\', ville TEXT DEFAULT \'\', tel TEXT DEFAULT \'\', email TEXT DEFAULT \'\', adresse TEXT DEFAULT \'\', solde NUMERIC DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW())',
-    'CREATE TABLE IF NOT EXISTS produits (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), ref TEXT DEFAULT \'\', nom TEXT NOT NULL, categorie TEXT DEFAULT \'\', designation TEXT DEFAULT \'\', famille TEXT DEFAULT \'\', prix NUMERIC DEFAULT 0, "prixHT" NUMERIC DEFAULT 0, "prixTTC" NUMERIC DEFAULT 0, stock INTEGER DEFAULT 0, "stockTheorique" INTEGER DEFAULT 0, "stockReel" INTEGER DEFAULT 0, "qteCdeClient" INTEGER DEFAULT 0, "qteCdeFourn" INTEGER DEFAULT 0, unite TEXT DEFAULT \'pièce\', created_at TIMESTAMPTZ DEFAULT NOW())',
-    'CREATE TABLE IF NOT EXISTS factures (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), numero TEXT DEFAULT \'\', client_id UUID REFERENCES clients(id) ON DELETE CASCADE, date DATE, echeance DATE, statut TEXT DEFAULT \'en_attente\', lignes JSONB DEFAULT \'[]\', livree BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW())',
-    'CREATE TABLE IF NOT EXISTS bons_livraison (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), numero TEXT DEFAULT \'\', facture_id UUID REFERENCES factures(id) ON DELETE SET NULL, client_id UUID REFERENCES clients(id) ON DELETE CASCADE, date DATE, date_livraison DATE, statut TEXT DEFAULT \'en cours\', lignes JSONB DEFAULT \'[]\', acompte NUMERIC DEFAULT 0, notes TEXT DEFAULT \'\', motif TEXT DEFAULT \'\', "tvaActive" BOOLEAN DEFAULT TRUE, "prixDirect" NUMERIC DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW())',
-    'CREATE INDEX IF NOT EXISTS idx_fac_cl ON factures(client_id)',
-    'CREATE INDEX IF NOT EXISTS idx_bl_cl ON bons_livraison(client_id)'
-  ];
-  var ok = 0;
-  for (var sql of tables) {
-    var res = await neonQuery(sql);
-    if (!res.error) ok++;
-    else console.error('Table init error:', res.error);
-  }
-  toast(ok + '/' + tables.length + ' opérations réussies', ok === tables.length ? 'success' : 'error');
+function resetSupabaseConfig() {
+  if(!confirm('Effacer la configuration Supabase ? L\'app repassera en mode local.')) return;
+  saveCFG({ supabaseUrl:'', supabaseAnon:'', supabaseEmail:'', supabasePassword:'' });
+  supa._token = null;
+  localStorage.removeItem('dp_token');
+  localStorage.removeItem('dp_user');
+  toast('Configuration Supabase effacée — mode local actif','success');
+  renderApp();
 }
 
 function saveAllCFG() {
@@ -3571,7 +3618,6 @@ function saveAllCFG() {
   applyTheme();
   const el = document.getElementById('cfg-saved');
   if(el){el.style.display='flex';setTimeout(()=>el.style.display='none',2500);}
-  applyTheme();
   renderApp();
   toast('Paramètres enregistrés !', 'success');
 }
@@ -3603,74 +3649,22 @@ function renderApp() {
 }
 
 function showApp() {
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("app").style.display = "flex";
   applyTheme();
   renderApp();
 }
-
 
 // ── HELPER ────────────────────────────────────
 function v(id) { const el=document.getElementById(id); return el?el.value:''; }
 
 // ── INIT ──────────────────────────────────────
 (async function init() {
-  S.user = { email: 'local' };
-  try {
-    await loadData();
-  } catch(e) {
-    console.warn('loadData error:', e.message);
-  }
+  S.user = {email:"local"};
+  try { await loadData(); } catch(e) { console.warn("loadData:",e.message); }
   showApp();
 })();
 
-function applyTheme() {
-  document.documentElement.style.setProperty('--theme-bg', CFG.themeColor+'30');
-  document.documentElement.style.setProperty('--theme-color', CFG.themeColor);
-}
-
-// ── RENDER APP ────────────────────────────────
-function renderApp() {
-  const pages = {
-    dashboard: renderDashboard,
-    clients: renderClients,
-    produits: renderProduits,
-    factures: renderFactures,
-    livraisons: renderBLs,
-    dossier: renderDossier,
-    paiements: renderPaiements,
-    rapports: renderRapports,
-    alertes: renderAlertes,
-    parametres: renderParametres,
-  };
-  const sidebar = S.page==='dossier' ? '' : renderSidebar();
-  const content = (pages[S.page]||renderDashboard)();
-  document.getElementById('app').innerHTML = sidebar
-    ? `${sidebar}<div class="main">${content}</div>`
-    : `<div style="flex:1;overflow-y:auto">${content}</div>`;
-}
-
-function showApp() {
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
-  applyTheme();
-  renderApp();
-}
-
-
-// ── HELPER ────────────────────────────────────
-function v(id) { const el=document.getElementById(id); return el?el.value:''; }
-
-// ── INIT ──────────────────────────────────────
-(async function init() {
-  S.user = { email: 'local' };
-  try {
-    await loadData();
-  } catch(e) {
-    console.warn('loadData error:', e.message);
-  }
-  showApp();
-})();
 </script>
 </body>
 </html>
