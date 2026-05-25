@@ -90,7 +90,7 @@ const today = () => new Date().toISOString().slice(0,10);
 //  API: /api/db (Vercel Serverless + Neon PostgreSQL)
 // ════════════════════════════════════════════════
 const TVA = 0.20;
-const calcTotal = (ls=[]) => ls.reduce((s,l)=>s+(+l.qte||0)*(+l.prix||0),0);
+const calcTotal = (ls=[]) => ls.reduce((s,l)=>{ const base=(+l.qte||0)*(+l.prix||0); const rem=base*(+(l.remise||0)/100); return s+base-rem; },0);
 const calcBL = (bl,prods=[]) => {
   // Prix direct si bl.prixDirect (import CSV sans lignes produit)
   const ht = bl.prixDirect!==undefined
@@ -116,7 +116,7 @@ const badge = s => {
 const fromF = r => ({...r, clientId:r.client_id});
 const fromB = r => ({...r, clientId:r.client_id, factureId:r.facture_id, dateLivraison:r.date_livraison});
 const toFRow = f => ({numero:f.numero||'',client_id:f.clientId||null,date:f.date||null,echeance:f.echeance||null,statut:f.statut||'en_attente',lignes:f.lignes||[],livree:!!f.livree});
-const toBRow = b => ({numero:b.numero||'',facture_id:b.factureId||null,client_id:b.clientId||null,date:b.date||null,date_livraison:b.dateLivraison||null,statut:b.statut||'en cours',lignes:b.lignes||[],acompte:+(b.acompte||0),notes:b.notes||''});
+const toBRow = b => ({numero:b.numero||'',facture_id:b.factureId||null,client_id:b.clientId||null,date:b.date||null,date_livraison:b.dateLivraison||null,statut:b.statut||'en cours',lignes:b.lignes||[],acompte:+(b.acompte||0),notes:b.notes||'',motif:b.motif||'',tvaActive:b.tvaActive!==false,prixDirect:+(b.prixDirect||0)});
 
 // ── ICONS ─────────────────────────────────────
 const svg = (paths,size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths.map(d=>`<path d="${d}"/>`).join('')}</svg>`;
@@ -1528,16 +1528,40 @@ function renderFactures() {
 }
 
 function lignesHTML(lignes=[]) {
-  return lignes.map((l,i)=>`
+  return `
+    <div class="flex gap8 aic" style="margin-bottom:6px;padding:0 2px">
+      <span style="flex:3;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase">Produit</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:center">Qté</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:center">Prix U.</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:center">Remise %</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:right">Total</span>
+      <span style="width:34px"></span>
+    </div>` +
+  lignes.map((l,i)=>{
+    const base=(+l.qte||0)*(+l.prix||0);
+    const rem=base*(+(l.remise||0)/100);
+    const total=base-rem;
+    return `
     <div class="flex gap8 aic" style="margin-bottom:8px" id="ligne-${i}">
       <select class="sel" style="flex:3" onchange="updateLigne(${i},'produitId',this.value);autoPrix(${i},this.value)">
         <option value="">Choisir un produit...</option>
         ${S.produits.map(p=>`<option value="${p.id}" ${l.produitId===p.id?'selected':''}>${esc(p.nom)}</option>`).join('')}
       </select>
-      <input type="number" class="inp" style="flex:1" value="${l.qte||1}" min="1" placeholder="Qté" onchange="updateLigne(${i},'qte',+this.value)">
-      <input type="number" class="inp" style="flex:1" value="${l.prix||0}" min="0" placeholder="Prix" onchange="updateLigne(${i},'prix',+this.value)" id="prix-${i}">
+      <input type="number" class="inp" style="flex:1;text-align:center" value="${l.qte||1}" min="1" placeholder="Qté"
+        onchange="updateLigne(${i},'qte',+this.value)">
+      <input type="number" class="inp" style="flex:1;text-align:center" value="${l.prix||0}" min="0" placeholder="Prix"
+        onchange="updateLigne(${i},'prix',+this.value)" id="prix-${i}">
+      <div style="flex:1;position:relative">
+        <input type="number" class="inp" style="text-align:center;padding-right:20px" value="${l.remise||0}" min="0" max="100" placeholder="0"
+          onchange="updateLigne(${i},'remise',+this.value)">
+        <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#94A3B8;font-size:12px;pointer-events:none">%</span>
+      </div>
+      <div style="flex:1;text-align:right;font-weight:700;color:${rem>0?'#00C48C':'#0F172A'};font-size:13px">
+        ${fmt(total)}
+        ${rem>0?`<div style="font-size:10px;color:#00C48C">-${fmt(rem)}</div>`:''}
+      </div>
       <button class="btn btn-danger" style="width:34px;height:34px;padding:0;flex-shrink:0;border-radius:8px" onclick="removeLigne(${i})">${ICONS.x}</button>
-    </div>`).join('');
+    </div>`;}).join('');
 }
 
 // Facture form state
@@ -1574,7 +1598,15 @@ function factureFormHTML() {
         <button class="btn btn-primary btn-sm" onclick="addLigne()">+ Ajouter</button>
       </div>
       <div id="lignes-container">${lignesHTML(_fForm.lignes)}</div>
-      <div style="text-align:right;font-weight:800;font-size:16px;margin-top:12px" id="total-line">Total TTC : ${fmt(calcTotal(_fForm.lignes))}</div>
+      <div style="margin-top:12px;text-align:right" id="total-line">
+        ${(()=>{
+          const ht=calcTotal(_fForm.lignes);
+          const tva=ht*(+(CFG.tva||20)/100);
+          const remTotal=(_fForm.lignes||[]).reduce((s,l)=>{const b=(+l.qte||0)*(+l.prix||0);return s+b*(+(l.remise||0)/100);},0);
+          return (remTotal>0?`<div style="font-size:12px;color:#00C48C">Remise totale : -${fmt(remTotal)}</div>`:'')
+            +`<div style="font-weight:800;font-size:16px">Total TTC : ${fmt(ht+tva)}</div>`;
+        })()}
+      </div>
     </div>
     <div class="flex jce gap10" style="margin-top:20px">
       <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
@@ -1698,6 +1730,9 @@ function renderBLs() {
             onclick="convertSelBLsToFacture()">
             ${ICONS.file} Convertir ${nbSel} BL en facture
           </button>`:''}
+          <button class="btn btn-primary" onclick="openNewBLModal()" style="font-weight:700">
+            ${ICONS.plus} Nouveau BL
+          </button>
           <button class="btn" style="background:#E6FBF4;color:#00C48C;border:none;font-weight:700" onclick="openImportBLModal()">
             ${ICONS.upload} Importer
           </button>
@@ -3747,4 +3782,170 @@ async function debugDB() {
 
 </script>
 </body>
-</html>
+</html>// ── NEW BL MODAL ──────────────────────────────────────────────
+let _blForm = null;
+function openNewBLModal() {
+  _blForm = {
+    clientId:'', date:today(), dateLivraison:'', statut:'en cours',
+    notes:'', motif:'', acompte:0, tvaActive:true,
+    lignes:[{produitId:'',qte:1,prix:0,remise:0}]
+  };
+  openModal('Nouveau Bon de Livraison', blFormHTML(), 820);
+}
+
+function blFormHTML() {
+  const b = _blForm;
+  const ht   = calcTotal(b.lignes);
+  const tva  = b.tvaActive ? ht*(+(CFG.tva||20)/100) : 0;
+  const ttc  = ht+tva;
+  const sol  = ttc-(+b.acompte||0);
+  return `
+    <div class="flex wrap gap16" style="margin-bottom:16px">
+      <div class="field half"><label>Client</label>
+        <select class="sel" onchange="_blForm.clientId=this.value">
+          <option value="">Choisir un client...</option>
+          ${S.clients.map(cl=>`<option value="${cl.id}" ${b.clientId===cl.id?'selected':''}>${esc(cl.nom)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field half"><label>Statut</label>
+        <select class="sel" onchange="_blForm.statut=this.value">
+          <option value="en cours" ${b.statut==='en cours'?'selected':''}>En cours</option>
+          <option value="livré"    ${b.statut==='livré'   ?'selected':''}>Livré</option>
+        </select>
+      </div>
+      <div class="field half"><label>Date BL</label>
+        <input type="date" class="inp" value="${b.date||''}" onchange="_blForm.date=this.value">
+      </div>
+      <div class="field half"><label>Date livraison</label>
+        <input type="date" class="inp" value="${b.dateLivraison||''}" onchange="_blForm.dateLivraison=this.value">
+      </div>
+      <div class="field half"><label>Acompte versé</label>
+        <input type="number" class="inp" value="${b.acompte||0}" min="0" onchange="_blForm.acompte=+this.value;updateBLTotal()">
+      </div>
+      <div class="field half" style="display:flex;align-items:flex-end;padding-bottom:4px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" ${b.tvaActive?'checked':''} style="width:16px;height:16px;accent-color:#6366F1"
+            onchange="_blForm.tvaActive=this.checked;updateBLTotal()">
+          <span style="font-weight:600">TVA ${CFG.tva||20}%</span>
+        </label>
+      </div>
+    </div>
+    <div style="background:#F8FAFC;border-radius:12px;padding:16px;margin-bottom:14px">
+      <div class="flex jcsb aic" style="margin-bottom:12px">
+        <span style="font-weight:700;font-size:14px">Lignes du BL</span>
+        <button class="btn btn-primary btn-sm" onclick="addBLLigne()">+ Ajouter</button>
+      </div>
+      <div id="bl-lignes-container">${blLignesHTML(b.lignes)}</div>
+      <div id="bl-total-line" style="margin-top:12px;text-align:right">${blTotalHTML()}</div>
+    </div>
+    <div class="field"><label>Notes</label>
+      <input class="inp" value="${esc(b.notes||'')}" placeholder="Description, remarques..." onchange="_blForm.notes=this.value">
+    </div>
+    <div class="flex jce gap10" style="margin-top:16px">
+      <button class="btn btn-outline" onclick="closeModal()">Annuler</button>
+      <button class="btn btn-primary" style="background:#00C48C" onclick="saveNewBL()">Créer le BL</button>
+    </div>`;
+}
+
+function blLignesHTML(lignes=[]) {
+  return `<div class="flex gap8 aic" style="margin-bottom:6px;padding:0 2px">
+      <span style="flex:3;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase">Produit</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:center">Qté</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:center">Prix U.</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:center">Remise %</span>
+      <span style="flex:1;font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;text-align:right">Total</span>
+      <span style="width:34px"></span>
+    </div>` +
+  lignes.map((l,i)=>{
+    const base=(+l.qte||0)*(+l.prix||0);
+    const rem=base*(+(l.remise||0)/100);
+    return `
+    <div class="flex gap8 aic" style="margin-bottom:8px">
+      <select class="sel" style="flex:3" onchange="updateBLLigne(${i},'produitId',this.value);autoBLPrix(${i},this.value)">
+        <option value="">Produit...</option>
+        ${S.produits.map(p=>`<option value="${p.id}" ${l.produitId===p.id?'selected':''}>${esc(p.nom)}</option>`).join('')}
+      </select>
+      <input type="number" class="inp" style="flex:1;text-align:center" value="${l.qte||1}" min="1"
+        onchange="updateBLLigne(${i},'qte',+this.value)">
+      <input type="number" class="inp" style="flex:1;text-align:center" value="${l.prix||0}" min="0" id="bl-prix-${i}"
+        onchange="updateBLLigne(${i},'prix',+this.value)">
+      <div style="flex:1;position:relative">
+        <input type="number" class="inp" style="text-align:center;padding-right:20px" value="${l.remise||0}" min="0" max="100"
+          onchange="updateBLLigne(${i},'remise',+this.value)">
+        <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#94A3B8;font-size:12px;pointer-events:none">%</span>
+      </div>
+      <div style="flex:1;text-align:right;font-weight:700;font-size:13px">
+        ${fmt(base-rem)}${rem>0?`<div style="font-size:10px;color:#00C48C">-${fmt(rem)}</div>`:''}
+      </div>
+      <button class="btn btn-danger" style="width:34px;height:34px;padding:0;flex-shrink:0;border-radius:8px" onclick="removeBLLigne(${i})">${ICONS.x}</button>
+    </div>`;}).join('');
+}
+
+function blTotalHTML() {
+  const b=_blForm;
+  const ht=calcTotal(b.lignes);
+  const tva=b.tvaActive?ht*(+(CFG.tva||20)/100):0;
+  const ttc=ht+tva; const sol=ttc-(+b.acompte||0);
+  const rem=(_blForm.lignes||[]).reduce((s,l)=>{const ba=(+l.qte||0)*(+l.prix||0);return s+ba*(+(l.remise||0)/100);},0);
+  return (rem>0?`<div style="font-size:12px;color:#00C48C">Remise : -${fmt(rem)}</div>`:'')
+    +(b.tvaActive?`<div style="font-size:12px;color:#64748B">HT: ${fmt(ht)} · TVA: ${fmt(tva)}</div>`:'')
+    +`<div style="font-weight:800;font-size:16px">Total TTC : ${fmt(ttc)}</div>`
+    +`<div style="font-size:13px;color:${sol>0?'#EF4444':'#00C48C'};font-weight:700">Solde dû : ${fmt(sol)}</div>`;
+}
+
+function addBLLigne() {
+  _blForm.lignes.push({produitId:'',qte:1,prix:0,remise:0});
+  document.getElementById('bl-lignes-container').innerHTML=blLignesHTML(_blForm.lignes);
+  updateBLTotal();
+}
+function removeBLLigne(i) {
+  _blForm.lignes.splice(i,1);
+  document.getElementById('bl-lignes-container').innerHTML=blLignesHTML(_blForm.lignes);
+  updateBLTotal();
+}
+function updateBLLigne(i,k,v) {
+  _blForm.lignes[i][k]=v;
+  document.getElementById('bl-lignes-container').innerHTML=blLignesHTML(_blForm.lignes);
+  updateBLTotal();
+}
+function autoBLPrix(i,prodId) {
+  const p=S.produits.find(x=>x.id===prodId);
+  if(p){_blForm.lignes[i].prix=p.prix;const el=document.getElementById('bl-prix-'+i);if(el)el.value=p.prix;}
+  document.getElementById('bl-lignes-container').innerHTML=blLignesHTML(_blForm.lignes);
+  updateBLTotal();
+}
+function updateBLTotal() {
+  const el=document.getElementById('bl-total-line');
+  if(el) el.innerHTML=blTotalHTML();
+}
+
+async function saveNewBL() {
+  if(!_blForm.clientId) return toast('Choisissez un client','error');
+  if(!_blForm.lignes.length) return toast('Ajoutez au moins une ligne','error');
+  const num='BL-'+new Date().getFullYear()+'-'+String(S.bls.length+1).padStart(3,'0');
+  const body = toBRow({
+    numero:num, clientId:_blForm.clientId,
+    date:_blForm.date||today(),
+    dateLivraison:_blForm.dateLivraison||null,
+    statut:_blForm.statut||'en cours',
+    lignes:_blForm.lignes,
+    acompte:+_blForm.acompte||0,
+    notes:_blForm.notes||'',
+    motif:_blForm.motif||'',
+    tvaActive:_blForm.tvaActive!==false,
+    prixDirect:0,
+  });
+  const {data,error} = await supa.insert('bons_livraison', body);
+  if(error) return toast(error.message,'error');
+  S.bls.push({...fromB(data||{}), ...(data?{}:{
+    id:'bl-'+Date.now(), numero:num, clientId:_blForm.clientId,
+    date:_blForm.date, statut:'en cours', lignes:_blForm.lignes,
+    acompte:+_blForm.acompte||0, notes:_blForm.notes||'',
+    tvaActive:_blForm.tvaActive!==false
+  })});
+  closeModal();
+  toast('BL '+num+' créé avec succès','success');
+  renderApp();
+}
+
+
