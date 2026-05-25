@@ -3771,18 +3771,7 @@ async function debugDB() {
   }
 }
 
-(async function init() {
-  S.user = {email:"local"};
-  // Show loading spinner while fetching data
-  const loadEl = document.getElementById('loading');
-  if(loadEl) loadEl.innerHTML = '<div class="spinner spin"></div><div style="font-size:14px;color:#64748B;margin-top:12px">Chargement des données...</div>';
-  await loadData();
-  showApp();
-})();
-
-</script>
-</body>
-</html>// ── NEW BL MODAL ──────────────────────────────────────────────
+// ── NEW BL MODAL ──────────────────────────────────────────────
 let _blForm = null;
 function openNewBLModal() {
   _blForm = {
@@ -3949,3 +3938,16 @@ async function saveNewBL() {
 }
 
 
+
+(async function init() {
+  S.user = {email:"local"};
+  // Show loading spinner while fetching data
+  const loadEl = document.getElementById('loading');
+  if(loadEl) loadEl.innerHTML = '<div class="spinner spin"></div><div style="font-size:14px;color:#64748B;margin-top:12px">Chargement des données...</div>';
+  await loadData();
+  showApp();
+})();
+
+</script>
+</body>
+</html>
